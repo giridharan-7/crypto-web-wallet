@@ -27,7 +27,7 @@ app.use('/api/dashboard',dashboardRoutes)
 
 console.log(process.env.PORT)
 
-const port=process.env.PORT || 5000
+const port=process.env.PORT || 3001
 
 app.listen(port,()=>{
     console.log(`server is running on port ${port} ...`)

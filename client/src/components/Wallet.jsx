@@ -1,8 +1,13 @@
 import React, { useState, useEffect } from 'react'
-import { Copy, Send, Plus, ChevronDown, X, ChevronRight } from 'lucide-react'
+import { Copy, Send, Plus, ChevronDown, X, ChevronRight, History, RefreshCw, TestTube, AlertTriangle } from 'lucide-react'
 import useWalletGenerator from '../hooks/useWalletGenerator'
- import useWalletActions from '../hooks/useWalletActions'
- import { decryptPrivateKey ,airdropSol,requestSepoliaFaucet} from '../hooks/useWalletActions'
+import useWalletActions from '../hooks/useWalletActions'
+import { decryptPrivateKey ,airdropSol,requestSepoliaFaucet} from '../hooks/useWalletActions'
+import TransactionHistory from './TransactionHistory'
+import TestModePanel from './TestModePanel'
+import NetworkSwitcher from './NetworkSwitcher'
+import { validateAddress } from '../utils/errorHandler'
+import { toast } from 'react-toastify'
 
 
 const PasswordModal = ({ isOpen, onClose, onSubmit }) => {
@@ -43,49 +48,67 @@ const PasswordModal = ({ isOpen, onClose, onSubmit }) => {
 const SendModal = ({ isOpen, onClose, wallet, index,type,onBalanceUpdate }) => {
   const [amount, setAmount] = useState('')
   const [receiverAddress, setReceiverAddress] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [errors, setErrors] = useState({})
   const senderSolanaAddress=JSON.parse(localStorage.getItem(`acnt${index}solanawallet`)).publicKey;
   const senderEthAddress=JSON.parse(localStorage.getItem(`acnt${index}etherwallet`)).publicKey;
-  // console.log(senderSolanaAddress,senderEthAddress)
   const { sendSolana, sendEth,getSolanaBalance,getEthBalance } = useWalletActions(senderSolanaAddress,senderEthAddress)
   
   
 
   if (!isOpen) return null
 
-  const handleSend = async () => {
-    const hashedPassword=localStorage.getItem('hashedPassword')
-    const saltForKey=localStorage.getItem('saltForKey')
-    const iv=localStorage.getItem('iv')
-    const walletInfo=localStorage.getItem(`acnt${index}${type=="Ethereum"?"ether":type.toLowerCase()}wallet`);
-    // console.log(type)
-    // console.log(`acnt${index}${type=="Etherium"?"ether":type.toLowerCase()}wallet`)
-    // console.log(JSON.parse(walletInfo))
-    const encryptedPrivateKey=JSON.parse(walletInfo).encryptedPrivateKey
-    // console.log(encryptedPrivateKey)
-    // console.log(encryptedPrivateKey)
-    const decryptedPrivateKey=decryptPrivateKey(encryptedPrivateKey,hashedPassword,saltForKey,iv)
-    if(type==='Solana'){
-      await sendSolana(decryptedPrivateKey,receiverAddress,amount)
-
-      // toast.success("Transaction successfull")
-      const SenderSolanaBalance=await getSolanaBalance(senderSolanaAddress)
-      const ReceiverSolanaBalance=await getSolanaBalance(receiverAddress)
-      onBalanceUpdate(SenderSolanaBalance,type)
-      onBalanceUpdate(ReceiverSolanaBalance,type)
-
-      console.log(SenderSolanaBalance,ReceiverSolanaBalance)
-
-
-    } else if(type==='Ethereum'){
-      await sendEth(decryptedPrivateKey,receiverAddress,amount)
-      // toast.success("Transaction successfull")
-      const SenderEthBalance=await getEthBalance(senderEthAddress)
-      const ReceiverEthBalance=await getEthBalance(receiverAddress)
-      onBalanceUpdate(SenderEthBalance,type)
-      onBalanceUpdate(ReceiverEthBalance,type)
+  const validateInputs = () => {
+    const newErrors = {}
+    
+    if (!amount || parseFloat(amount) <= 0) {
+      newErrors.amount = 'Please enter a valid amount'
     }
-    // console.log(`Sending ${amount} ${type} to ${receiverAddress}`)
-    onClose()
+    
+    if (!receiverAddress) {
+      newErrors.receiverAddress = 'Please enter a receiver address'
+    } else if (!validateAddress(receiverAddress, type.toLowerCase())) {
+      newErrors.receiverAddress = `Invalid ${type} address format`
+    }
+    
+    setErrors(newErrors)
+    return Object.keys(newErrors).length === 0
+  }
+
+  const handleSend = async () => {
+    if (!validateInputs()) {
+      return
+    }
+
+    setIsLoading(true)
+    try {
+      const hashedPassword=localStorage.getItem('hashedPassword')
+      const saltForKey=localStorage.getItem('saltForKey')
+      const iv=localStorage.getItem('iv')
+      const walletInfo=localStorage.getItem(`acnt${index}${type=="Ethereum"?"ether":type.toLowerCase()}wallet`);
+      const encryptedPrivateKey=JSON.parse(walletInfo).encryptedPrivateKey
+      const decryptedPrivateKey=decryptPrivateKey(encryptedPrivateKey,hashedPassword,saltForKey,iv)
+      
+      if(type==='Solana'){
+        await sendSolana(decryptedPrivateKey,receiverAddress,amount)
+        const SenderSolanaBalance=await getSolanaBalance(senderSolanaAddress)
+        onBalanceUpdate(SenderSolanaBalance,type)
+      } else if(type==='Ethereum'){
+        await sendEth(decryptedPrivateKey,receiverAddress,amount)
+        const SenderEthBalance=await getEthBalance(senderEthAddress)
+        onBalanceUpdate(SenderEthBalance,type)
+      }
+      
+      // Clear form and close modal
+      setAmount('')
+      setReceiverAddress('')
+      setErrors({})
+      onClose()
+    } catch (error) {
+      // Error handling is done in the wallet actions
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const handleAirDrop = async () => {
@@ -126,35 +149,66 @@ const SendModal = ({ isOpen, onClose, wallet, index,type,onBalanceUpdate }) => {
               type="text"
               id="receiverAddress"
               value={receiverAddress}
-              onChange={(e) => setReceiverAddress(e.target.value)}
-              className="mt-1 w-full bg-[#1a1b23] text-white border border-gray-700 rounded-md p-2"
+              onChange={(e) => {
+                setReceiverAddress(e.target.value)
+                if (errors.receiverAddress) {
+                  setErrors(prev => ({ ...prev, receiverAddress: '' }))
+                }
+              }}
+              className={`mt-1 w-full bg-[#1a1b23] text-white border rounded-md p-2 ${
+                errors.receiverAddress ? 'border-red-500' : 'border-gray-700'
+              }`}
               placeholder="Enter receiver's address"
             />
+            {errors.receiverAddress && (
+              <p className="mt-1 text-sm text-red-400">{errors.receiverAddress}</p>
+            )}
           </div>
           <div>
             <label htmlFor="amount" className="block text-sm font-medium text-gray-400">Amount</label>
             <input
               type="number"
+              step="any"
+              min="0"
               id="amount"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="mt-1 w-full bg-[#1a1b23] text-white border border-gray-700 rounded-md p-2"
+              onChange={(e) => {
+                setAmount(e.target.value)
+                if (errors.amount) {
+                  setErrors(prev => ({ ...prev, amount: '' }))
+                }
+              }}
+              className={`mt-1 w-full bg-[#1a1b23] text-white border rounded-md p-2 ${
+                errors.amount ? 'border-red-500' : 'border-gray-700'
+              }`}
               placeholder={`Enter amount in ${type === 'Solana' ? 'SOL' : 'ETH'}`}
             />
+            {errors.amount && (
+              <p className="mt-1 text-sm text-red-400">{errors.amount}</p>
+            )}
           </div>
         </div>
         <div className="mt-6 flex justify-around">
           <button
             onClick={handleAirDrop}
-            className="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 transition-colors"
+            disabled={isLoading}
+            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Request AirDrop
+            {isLoading ? 'Processing...' : 'Request AirDrop'}
           </button>
           <button
             onClick={handleSend}
-            className="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 transition-colors"
+            disabled={isLoading || !amount || !receiverAddress}
+            className="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
           >
-            Send
+            {isLoading ? (
+              <>
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                Sending...
+              </>
+            ) : (
+              'Send'
+            )}
           </button>
         </div>
       </div>
@@ -162,15 +216,17 @@ const SendModal = ({ isOpen, onClose, wallet, index,type,onBalanceUpdate }) => {
   )
 }
 
-const WalletCard = ({ wallet, index, type }) => {
+const WalletCard = ({ wallet, index, type, currentNetwork }) => {
   const [isSendModalOpen, setIsSendModalOpen] = useState(false)
+  const [showTransactions, setShowTransactions] = useState(false)
+  const [showTestMode, setShowTestMode] = useState(false)
+  const [balanceLoading, setBalanceLoading] = useState(false)
   const senderSolanaAddress = JSON.parse(localStorage.getItem(`acnt${index}solanawallet`)).publicKey;
   const senderEthAddress = JSON.parse(localStorage.getItem(`acnt${index}etherwallet`)).publicKey;
-  // console.log(senderSolanaAddress,senderEthAddress)
   const { getSolanaBalance, getEthBalance,airdropSol } = useWalletActions(senderSolanaAddress, senderEthAddress)
   
   const [solBalance, setSolBalance] = useState(0)
-   const [ethBalance, setEthBalance] = useState(0)
+  const [ethBalance, setEthBalance] = useState(0)
   // const setData=async ()=>{
   //   // await airdropSol(senderSolanaAddress)
   //   console.log("hi his is for test",await getSolanaBalance("6vzDhiWSpJeFcjv6CiaEGNq5VQ79TkqxqyA7cAkCSAzu"))
@@ -222,36 +278,109 @@ const WalletCard = ({ wallet, index, type }) => {
       setEthBalance(newBalance)
     } 
   }
+
+  const refreshBalance = async () => {
+    setBalanceLoading(true)
+    try {
+      if(type=="Solana"){
+        const newBalance = await getSolanaBalance(senderSolanaAddress)
+        setSolBalance(newBalance)
+      } else if(type=="Ethereum"){
+        const newBalance = await getEthBalance(senderEthAddress)
+        setEthBalance(newBalance)
+      }
+    } catch (error) {
+      toast.error('Failed to refresh balance')
+    } finally {
+      setBalanceLoading(false)
+    }
+  }
  
 
   return (
-    <div className="bg-[#2a2b35] rounded-lg p-4 mb-4 relative overflow-hidden group">
-      <div className="flex justify-between items-center mb-2">
+    <div className="bg-[#2a2b35] rounded-lg p-4 mb-4 relative overflow-hidden">
+      <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold text-white">{type} Wallet</h3>
-        <span className="text-sm text-gray-400">Balance:{type=="Solana"?solBalance:ethBalance}</span>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={refreshBalance}
+            disabled={balanceLoading}
+            className="text-gray-400 hover:text-white transition-colors p-1 rounded"
+            title="Refresh balance"
+          >
+            <RefreshCw className={`w-4 h-4 ${balanceLoading ? 'animate-spin' : ''}`} />
+          </button>
+          <span className="text-sm text-gray-400">
+            Balance: {balanceLoading ? '...' : (type=="Solana"?solBalance:ethBalance)} {type === 'Solana' ? 'SOL' : 'ETH'}
+          </span>
+        </div>
       </div>
-      <div className="flex justify-between items-center">
-        <button 
-          className="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 transition-colors flex items-center"
-          onClick={() => setIsSendModalOpen(true)}
-        >
-          <Send className="w-4 h-4 mr-2" />
-          Send
-        </button>
-        <div className="relative">
-          <div className="text-gray-400 text-sm truncate w-32 group-hover:invisible">
-            {WalletStatus.publicKey.slice(0, 8)}...{WalletStatus.publicKey.slice(-8)}
-          </div>
-          <div className="absolute inset-0 flex items-center invisible group-hover:visible">
-            <button
-              onClick={() => navigator.clipboard.writeText(wallet.publicKey)}
-              className="text-purple-500 hover:text-purple-600 transition-colors flex items-center"
+      
+      <div className="space-y-3">
+        <div className="flex justify-between items-center">
+          <div className="flex space-x-2">
+            <button 
+              className="bg-purple-600 text-white px-3 py-2 rounded-md hover:bg-purple-700 transition-colors flex items-center text-sm"
+              onClick={() => setIsSendModalOpen(true)}
             >
-              <Copy className="w-4 h-4 mr-1" />
-              Copy
+              <Send className="w-4 h-4 mr-1" />
+              Send
+            </button>
+            <button
+              onClick={() => setShowTransactions(!showTransactions)}
+              className="bg-gray-600 text-white px-3 py-2 rounded-md hover:bg-gray-700 transition-colors flex items-center text-sm"
+            >
+              <History className="w-4 h-4 mr-1" />
+              History
+            </button>
+            {currentNetwork === 'testnet' && (
+              <button
+                onClick={() => setShowTestMode(!showTestMode)}
+                className="bg-gradient-to-r from-amber-500 to-orange-500 text-white px-3 py-2 rounded-md hover:from-amber-600 hover:to-orange-600 transition-colors flex items-center text-sm"
+              >
+                <TestTube className="w-4 h-4 mr-1" />
+                Test Mode
+              </button>
+            )}
+          </div>
+          
+          <div className="flex items-center space-x-2">
+            <span className="text-gray-400 text-xs">
+              {WalletStatus.publicKey.slice(0, 6)}...{WalletStatus.publicKey.slice(-6)}
+            </span>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(wallet.publicKey)
+                toast.success('Address copied!')
+              }}
+              className="text-purple-500 hover:text-purple-600 transition-colors flex items-center p-1 rounded"
+              title="Copy address"
+            >
+              <Copy className="w-4 h-4" />
             </button>
           </div>
         </div>
+        
+        {showTestMode && currentNetwork === 'testnet' && (
+          <div className="mt-4">
+            <TestModePanel 
+              walletAddress={WalletStatus.publicKey}
+              type={type}
+              onBalanceUpdate={updateBalance}
+              getSolanaBalance={getSolanaBalance}
+              getEthBalance={getEthBalance}
+            />
+          </div>
+        )}
+
+        {showTransactions && (
+          <div className="mt-4">
+            <TransactionHistory 
+              walletAddress={WalletStatus.publicKey} 
+              type={type.toLowerCase()} 
+            />
+          </div>
+        )}
       </div>
       <SendModal
         isOpen={isSendModalOpen}
@@ -265,7 +394,7 @@ const WalletCard = ({ wallet, index, type }) => {
   )
 }
 
-const AccountCard = ({ account }) => {
+const AccountCard = ({ account, currentNetwork }) => {
   const [isExpanded, setIsExpanded] = useState(true)
 
   return (
@@ -287,8 +416,8 @@ const AccountCard = ({ account }) => {
       </div>
       {isExpanded && (
         <div className="p-4 pt-0">
-          <WalletCard wallet={account.solanaWallet} index={account.index} type="Solana" />
-          <WalletCard wallet={account.etherWallet} index={account.index} type="Ethereum" />
+          <WalletCard wallet={account.solanaWallet} index={account.index} type="Solana" currentNetwork={currentNetwork} />
+          <WalletCard wallet={account.etherWallet} index={account.index} type="Ethereum" currentNetwork={currentNetwork} />
         </div>
       )}
     </div>
@@ -299,7 +428,19 @@ export default function Wallet() {
   const [accounts, setAccounts] = useState([])
   const [loading, setLoading] = useState(false)
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
+  const [currentNetwork, setCurrentNetwork] = useState('testnet')
   const { generateWallets, error } = useWalletGenerator()
+
+  useEffect(() => {
+    // Load network preference
+    const savedNetwork = localStorage.getItem('network') || 'testnet'
+    setCurrentNetwork(savedNetwork)
+  }, [])
+
+  const handleLogout = () => {
+    localStorage.removeItem('authToken')
+    window.location.href = '/login'
+  }
 
   useEffect(() => {
     loadAccounts()
@@ -334,34 +475,108 @@ export default function Wallet() {
   }
 
   return (
-    <div className="min-h-screen bg-[#1a1b23] text-white p-6">
-      <div className="max-w-3xl mx-auto">
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold">My Wallets</h1>
-          <button
-            onClick={() => setIsPasswordModalOpen(true)}
-            disabled={loading}
-            className="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 transition-colors flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading ? (
-              'Generating...'
-            ) : (
-              <>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Account
-              </>
-            )}
-          </button>
+    <div className="min-h-screen bg-[#1a1b23] text-white">
+      {/* Header */}
+      <div className="border-b border-gray-800 bg-[#2a2b35]">
+        <div className="max-w-6xl mx-auto px-6 py-4">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center space-x-4">
+              <h1 className="text-2xl font-bold">Crypto Wallet</h1>
+              <div className="flex items-center space-x-3">
+                <span className="text-sm text-gray-400">
+                  {accounts.length} account{accounts.length !== 1 ? 's' : ''}
+                </span>
+                <NetworkSwitcher />
+              </div>
+            </div>
+            <div className="flex items-center space-x-3">
+              <button
+                onClick={() => setIsPasswordModalOpen(true)}
+                disabled={loading}
+                className="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 transition-colors flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Account
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleLogout}
+                className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition-colors"
+              >
+                Logout
+              </button>
+            </div>
+          </div>
         </div>
+      </div>
 
-        {error && <p className="text-red-500 mb-4">{error}</p>}
+      {/* Main Content */}
+      <div className="max-w-6xl mx-auto p-6">
+        {/* Mainnet Warning */}
+        {currentNetwork === 'mainnet' && (
+          <div className="bg-gradient-to-r from-red-900/30 to-red-800/30 border border-red-700/50 rounded-xl p-4 mb-6">
+            <div className="flex items-start space-x-3">
+              <div className="bg-red-600 p-2 rounded-lg">
+                <AlertTriangle className="w-5 h-5 text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-red-200 font-semibold mb-1">⚠️ Mainnet Mode Active</h3>
+                <p className="text-red-300/80 text-sm leading-relaxed">
+                  You are using real cryptocurrency networks. All transactions will cost real money and cannot be undone. 
+                  Double-check all addresses and amounts before sending.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="bg-red-900 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-6">
+            <p>{error}</p>
+          </div>
+        )}
 
         {accounts.length === 0 ? (
-          <p className="text-gray-400">No wallets available. Please add an account.</p>
+          <div className="text-center py-12">
+            <div className="bg-[#2a2b35] rounded-lg p-8 max-w-md mx-auto">
+              <Plus className="w-16 h-16 text-gray-500 mx-auto mb-4" />
+              <h3 className="text-xl font-semibold mb-2">No wallets yet</h3>
+              <p className="text-gray-400 mb-6">
+                Create your first wallet account to start managing your crypto assets.
+              </p>
+              <button
+                onClick={() => setIsPasswordModalOpen(true)}
+                disabled={loading}
+                className="bg-purple-600 text-white px-6 py-3 rounded-md hover:bg-purple-700 transition-colors flex items-center mx-auto disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? (
+                  <>
+                    <RefreshCw className="w-5 h-5 mr-2 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-5 h-5 mr-2" />
+                    Create First Wallet
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         ) : (
-          accounts.map((account) => (
-            <AccountCard key={account.index} account={account} />
-          ))
+          <div className="grid gap-6">
+            {accounts.map((account) => (
+              <AccountCard key={account.index} account={account} currentNetwork={currentNetwork} />
+            ))}
+          </div>
         )}
       </div>
 

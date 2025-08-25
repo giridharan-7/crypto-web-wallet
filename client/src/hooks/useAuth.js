@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { ENDPOINTS } from '../config/api';
 
 const useAuth = ()=>{
     const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -21,7 +22,7 @@ const useAuth = ()=>{
             return;
         }
         try{
-            const response = await fetch('api/dashboard',{
+            const response = await fetch(ENDPOINTS.DASHBOARD,{
                 method:'GET',
                 headers:{
                     'Content-Type':'application/json',

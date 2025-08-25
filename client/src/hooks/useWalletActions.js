@@ -3,11 +3,22 @@ import { ethers } from 'ethers';
 import { Connection, clusterApiUrl, Keypair, LAMPORTS_PER_SOL, Transaction, SystemProgram, sendAndConfirmTransaction, PublicKey } from '@solana/web3.js';
 import crypto from 'crypto';
 import {Buffer} from 'buffer';
+import { getEndpoints, getCurrentNetwork, NETWORK_CONFIG } from '../config/api';
+import { handleWalletError, validateAddress } from '../utils/errorHandler';
+import { toast } from 'react-toastify';
 
-const ethProvider = new ethers.getDefaultProvider('https://sepolia.infura.io/v3/f1eacd24f5a44535a14fc93a91e380a8');
-
-
-const solConnection = new Connection(clusterApiUrl('devnet'), 'confirmed');
+// Get current network configuration
+const getCurrentProviders = () => {
+  const network = getCurrentNetwork();
+  const endpoints = getEndpoints();
+  const config = NETWORK_CONFIG[network];
+  
+  return {
+    ethProvider: new ethers.getDefaultProvider(endpoints.ETHEREUM_RPC),
+    solConnection: new Connection(clusterApiUrl(config.solana.cluster), 'confirmed'),
+    network
+  };
+};
 
 export const decryptPrivateKey = (encryptedPrivateKey, hashedPassword, saltForKey, iv) => {
   const key = crypto.pbkdf2Sync(hashedPassword, saltForKey, 10000, 16, 'sha256');
@@ -19,7 +30,13 @@ export const decryptPrivateKey = (encryptedPrivateKey, hashedPassword, saltForKe
 };
 
 export const airdropSol = async (publicKey, amount) => {
-  // setLoading(true);
+  const { solConnection, network } = getCurrentProviders();
+  
+  // Only allow airdrops on testnet
+  if (network !== 'testnet') {
+    throw new Error('Airdrops are only available on testnet');
+  }
+  
   try {
     const signature = await solConnection.requestAirdrop(new PublicKey(publicKey), amount * LAMPORTS_PER_SOL);
     const latestBlockhash = await solConnection.getLatestBlockhash();
@@ -29,19 +46,24 @@ export const airdropSol = async (publicKey, amount) => {
       lastValidBlockHeight: latestBlockhash.lastValidBlockHeight
     });
     console.log(`Airdrop successful! Signature: ${signature}`);
-    // console.log(await getSolanaBalance(publicKey));
   } catch (error) {
     console.error('Error requesting SOL airdrop:', error);
-  } finally {
-    // setLoading(false);
+    throw error;
   }
 };
 
 export const requestSepoliaFaucet = async (ethAddress) => {
-  // setLoading(true);
+  const { network } = getCurrentProviders();
+  const endpoints = getEndpoints();
+  
+  // Only allow faucet requests on testnet
+  if (network !== 'testnet') {
+    throw new Error('Faucet requests are only available on testnet');
+  }
+  
   try {
-   console.log("this is eth faucet")
-    const response = await fetch('https://faucet.sepolia.dev/', {
+    console.log("Requesting ETH from Sepolia faucet");
+    const response = await fetch(endpoints.SEPOLIA_FAUCET, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -49,17 +71,16 @@ export const requestSepoliaFaucet = async (ethAddress) => {
       body: JSON.stringify({ address: ethAddress }),
     });
     const result = await response.json();
-    console.log(result)
+    console.log(result);
     if (result.success) {
       console.log(`Sepolia ETH faucet request successful! Transaction: ${result.txHash}`);
-      // await getEthBalance(ethAddress); 
     } else {
       console.error('Faucet request failed:', result.message);
+      throw new Error(result.message || 'Faucet request failed');
     }
   } catch (error) {
     console.error('Error requesting Sepolia ETH from faucet:', error);
-  } finally {
-    // setLoading(false);
+    throw error;
   }
 };
 
@@ -70,19 +91,15 @@ export default function useWalletActions(senderSolPublicKey, senderEthAddress) {
   const [loading, setLoading] = useState(false);
 
   const getSolanaBalance = async (publicKey) => {
-    // console.log("hi this is from this public key",publicKey)
-    const Address=new PublicKey(publicKey);
+    const { solConnection } = getCurrentProviders();
+    const Address = new PublicKey(publicKey);
     const balance = await solConnection.getBalance(Address);
-    // console.log(publicKey,balance/LAMPORTS_PER_SOL)
-    // setSolanaBalance(balance / LAMPORTS_PER_SOL);
     return balance / LAMPORTS_PER_SOL;
   };
 
-
   const getEthBalance = async (ethAddress) => {
+    const { ethProvider } = getCurrentProviders();
     const balance = await ethProvider.getBalance(ethAddress);
-    // console.log(balance)
-    // setEthBalance(ethers.formatEther(balance)); 
     return ethers.formatEther(balance);
   };
 
@@ -91,24 +108,42 @@ export default function useWalletActions(senderSolPublicKey, senderEthAddress) {
   const sendSolana = async (senderPrivateKey, recipientAddress, amount) => {
     setLoading(true);
     try {
+      const { solConnection, network } = getCurrentProviders();
+      
+      // Validate inputs
+      if (!validateAddress(recipientAddress, 'solana')) {
+        throw new Error('Invalid Solana address');
+      }
+      if (!amount || amount <= 0) {
+        throw new Error('Invalid amount');
+      }
+
       const secretKeyArray=Uint8Array.from(senderPrivateKey.split(',').map(Number));
-      // const privateKeyArray=Uint8Array.from(Buffer.from(senderPrivateKey, 'hex'));
-      // const publicKeyArray=Uint8Array.from(Buffer.from(senderSolPublicKey, 'hex'));
-      // const secretKeyArray=new Uint8Array([...privateKeyArray,...publicKeyArray]);
-      // console.log(secretKeyArray.byteLength)
       const senderKeypair = Keypair.fromSecretKey(secretKeyArray);
       const lamportsToSend = amount * LAMPORTS_PER_SOL;
+      
+      // Check balance before sending
+      const senderBalance = await solConnection.getBalance(senderKeypair.publicKey);
+      if (senderBalance < lamportsToSend) {
+        throw new Error('Insufficient funds for this transaction');
+      }
+
       const transaction = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: senderKeypair.publicKey,
-          toPubkey: recipientAddress,
+          toPubkey: new PublicKey(recipientAddress),
           lamports: lamportsToSend,
         })
       );
+      
       const signature = await sendAndConfirmTransaction(solConnection, transaction, [senderKeypair]);
-       console.log(`Transaction successful! Signature: ${signature}`);
+      
+      const networkName = network === 'testnet' ? 'Devnet' : 'Mainnet';
+      toast.success(`${networkName} transaction successful! Signature: ${signature.slice(0, 8)}...`);
+      console.log(`Transaction successful! Signature: ${signature}`);
     } catch (error) {
-       console.error('Error sending SOL:', error);
+      handleWalletError(error, 'send Solana');
+      throw error;
     } finally {
       setLoading(false);
     }
@@ -117,15 +152,37 @@ export default function useWalletActions(senderSolPublicKey, senderEthAddress) {
   const sendEth = async (senderPrivateKey, recipientAddress, amount) => {
     setLoading(true);
     try {
+      const { ethProvider, network } = getCurrentProviders();
+      
+      // Validate inputs
+      if (!validateAddress(recipientAddress, 'ethereum')) {
+        throw new Error('Invalid Ethereum address');
+      }
+      if (!amount || amount <= 0) {
+        throw new Error('Invalid amount');
+      }
 
       const wallet = new ethers.Wallet(senderPrivateKey, ethProvider);
+      
+      // Check balance before sending
+      const senderBalance = await ethProvider.getBalance(wallet.address);
+      const amountInWei = ethers.parseEther(amount.toString());
+      if (senderBalance < amountInWei) {
+        throw new Error('Insufficient funds for this transaction');
+      }
+
       const transaction = await wallet.sendTransaction({
         to: recipientAddress,
-        value: ethers.parseEther(amount),
+        value: amountInWei,
       });
+      
+      const networkName = network === 'testnet' ? 'Sepolia' : 'Mainnet';
+      toast.success(`${networkName} transaction successful! Hash: ${transaction.hash.slice(0, 8)}...`);
       console.log(`Transaction hash: ${transaction.hash}`);
+      return transaction;
     } catch (error) {
-      console.error('Error sending ETH:', error);
+      handleWalletError(error, 'send Ethereum');
+      throw error;
     } finally {
       setLoading(false);
     }
